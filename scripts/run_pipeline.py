@@ -32,17 +32,17 @@ def main():
         summary = orchestrator.get_pipeline_summary()
         logger.info("Pipeline summary", **summary)
         
-        print("🎉 FARA pipeline test completed successfully")
+        print("FARA pipeline test completed successfully")
         print(f"Test job ID: {job_id}")
         print("Pipeline summary:", summary)
         
     except FARAError as e:
         logger.error("FARA pipeline error", error=str(e))
-        print(f"❌ FARA pipeline error: {e}")
+        print(f"FARA pipeline error: {e}")
         sys.exit(1)
     except Exception as e:
         logger.error("Unexpected error", error=str(e))
-        print(f"❌ Unexpected error: {e}")
+        print(f"Unexpected error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
