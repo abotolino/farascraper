@@ -616,7 +616,3 @@ Contributions are welcome!
 - **Documentation**: Check the `docs/` directory for detailed guides
 - **Issues**: Use GitHub Issues for bug reports and feature requests
 - **Email**: [abotolino@opensecrets.com] for direct support
-
----
-
-**Built with ❤️ for government transparency and automation**
