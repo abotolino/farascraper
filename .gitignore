@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Environment Variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Data and Logs
+data/raw/
+data/processed/
+data/logs/
+data/cache/
+data/backups/
+*.log
+
+# Database
+*.db
+*.sqlite
+
+# Documents
+*.pdf
+*.jpg
+*.png
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Credentials
+credentials.json
+secrets.json
