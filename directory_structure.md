@@ -88,3 +88,4 @@ If you prefer to create them manually:
 3. **Other directories:**
    - `scripts/maintenance/.gitkeep`
    - `docs/.gitkeep`
+   
