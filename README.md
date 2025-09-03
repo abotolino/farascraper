@@ -45,7 +45,7 @@ python scripts/test_scraper.py
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
 
-## ✨ Features
+## Features
 
 ### Stage 1: Document Download ✅ **COMPLETED**
 - **Automated Authentication**: Handles Rails/Devise login with CSRF tokens
