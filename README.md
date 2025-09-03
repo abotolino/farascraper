@@ -92,7 +92,7 @@ python scripts/test_scraper.py
 ### Project Structure
 
 ```
-fara-pipeline/
+farascraper/
 ├── README.md                    # This file
 ├── requirements.txt             # Python dependencies
 ├── setup.py                     # Package installation
