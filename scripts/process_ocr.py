@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
 try:
-    from src.pipeline.fara_ocr_clean import FARAProcessor
+    from src.pipeline.fara_ocr_clean import FARAOCRProcessor, FARAConfig
     from src.common.logger import get_logger
     from config.settings import settings
 except ImportError as e:
@@ -45,9 +45,15 @@ def process_downloaded_documents():
     
     print(f"📄 Found {len(pdf_files)} PDF documents to process")
     
-    # Initialize OCR processor
+    # Initialize OCR processor with custom config
     try:
-        processor = FARAProcessor()
+        # Create custom config that uses our project settings paths
+        config = FARAConfig()
+        config.input_dir = settings.raw_documents
+        config.output_dir = settings.processed_data
+        config.log_dir = settings.logs
+        
+        processor = FARAOCRProcessor(config)
         logger.info("OCR processor initialized")
     except Exception as e:
         print(f"❌ Failed to initialize OCR processor: {e}")
@@ -61,16 +67,16 @@ def process_downloaded_documents():
         print(f"\n🔄 Processing: {pdf_file.name}")
         
         try:
-            # Process the PDF
-            result = processor.process_pdf(str(pdf_file))
+            # Process the PDF - returns FARAData object or None
+            result = processor.process_single_document(pdf_file)
             
-            if result.get('success', False):
+            if result is not None:
                 print(f"✅ Successfully processed: {pdf_file.name}")
+                print(f"   Registrant: {result.registrant_name or 'Not found'}")
+                print(f"   Confidence: {result.confidence_score:.1f}%")
                 processed_count += 1
             else:
                 print(f"❌ Failed to process: {pdf_file.name}")
-                if 'error' in result:
-                    print(f"   Error: {result['error']}")
                 failed_count += 1
                 
         except Exception as e:
