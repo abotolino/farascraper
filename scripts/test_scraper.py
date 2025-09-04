@@ -35,12 +35,41 @@ def main():
             if len(available_docs) > 5:
                 print(f"... and {len(available_docs) - 5} more documents")
             
-            # Ask if user wants to download all
-            response = input("\nWould you like to download all waiting documents? (y/N): ")
-            if response.lower().startswith('y'):
-                print("\nStarting bulk download...")
-                results = downloader.download_all_waiting_documents()
+            # Ask user how many documents to download
+            print(f"\nDownload Options:")
+            print(f"1. Download ALL {len(available_docs)} documents")
+            print(f"2. Download a specific number of documents")
+            print(f"3. Skip downloading")
+            
+            while True:
+                choice = input("\nEnter your choice (1-3): ").strip()
                 
+                if choice == '3':
+                    print("Skipping download.")
+                    break
+                elif choice == '1':
+                    print(f"\nStarting download of all {len(available_docs)} documents...")
+                    results = downloader.download_waiting_documents()
+                    break
+                elif choice == '2':
+                    while True:
+                        try:
+                            max_docs = input(f"Enter number of documents to download (1-{len(available_docs)}): ").strip()
+                            max_docs = int(max_docs)
+                            if 1 <= max_docs <= len(available_docs):
+                                print(f"\nStarting download of {max_docs} documents...")
+                                results = downloader.download_waiting_documents(max_docs)
+                                break
+                            else:
+                                print(f"Please enter a number between 1 and {len(available_docs)}")
+                        except ValueError:
+                            print("Please enter a valid number")
+                    break
+                else:
+                    print("Please enter 1, 2, or 3")
+            
+            # Show results if we downloaded anything
+            if 'results' in locals():
                 print("\nDownload Results:")
                 print(f"Total documents: {results['total_documents']}")
                 print(f"Successful: {results['successful_downloads']}")

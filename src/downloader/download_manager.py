@@ -97,11 +97,17 @@ class DownloadManager:
             logger.error("Failed to get available documents", error=str(e))
             return []
     
-    def download_all_waiting_documents(self) -> Dict[str, Any]:
-        """Download all documents waiting to be processed"""
+    def download_waiting_documents(self, max_count: Optional[int] = None) -> Dict[str, Any]:
+        """Download waiting documents with optional limit"""
         try:
             waiting_docs = self.scraper.get_waiting_documents_list()
-            logger.info("Found waiting documents", count=len(waiting_docs))
+            
+            # Limit the number of documents if specified
+            if max_count is not None and max_count > 0:
+                waiting_docs = waiting_docs[:max_count]
+                logger.info("Limited document list", requested=max_count, actual=len(waiting_docs))
+            else:
+                logger.info("Found waiting documents", count=len(waiting_docs))
             
             results = {
                 "total_documents": len(waiting_docs),
@@ -135,3 +141,7 @@ class DownloadManager:
                 "success": False,
                 "error": str(e)
             }
+    
+    def download_all_waiting_documents(self) -> Dict[str, Any]:
+        """Download all documents waiting to be processed (backward compatibility)"""
+        return self.download_waiting_documents()
