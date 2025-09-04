@@ -29,8 +29,11 @@ pip install -e .
 cp .env.example .env
 # Edit .env with your FARA credentials
 
-# Run a test
+# Download documents
 python3 scripts/test_scraper.py
+
+# Process with OCR
+python3 scripts/process_ocr.py
 ```
 
 ## 📋 Table of Contents
@@ -266,43 +269,83 @@ LOG_FILE_ROTATION=true
 
 ### Basic Usage
 
-#### 1. Test Your Setup
+#### 1. Download FARA Documents
 
 ```bash
-# Test FARA website connection
+# Test connection and download documents
 python3 scripts/test_scraper.py
 
-# Expected output:
-# Authentication successful
-# Found X documents waiting to be processed
-# Successfully downloaded sample PDF
+# Choose from flexible download options:
+# 1. Download ALL documents
+# 2. Download specific number of documents  
+# 3. Skip downloading
+
+# Example output:
+# 🔐 FARA Authentication Required
+# Found 100 documents waiting to be processed
+# Download Options:
+# 1. Download ALL 100 documents
+# 2. Download a specific number of documents
+# 3. Skip downloading
 ```
 
-#### 2. Run the Full Pipeline
+#### 2. Process Documents with OCR
 
 ```bash
-# Process all available documents
+# Extract text from downloaded PDFs using OCR
+python3 scripts/process_ocr.py
+
+# Expected output:
+# 📄 Found 5 PDF documents to process
+# 🔄 Processing: document1.pdf
+# ✅ Successfully processed: document1.pdf
+# 📊 Processing Summary:
+#    ✅ Successfully processed: 4
+#    ❌ Failed: 1
+```
+
+#### 3. Run the Complete Pipeline
+
+```bash
+# Process downloaded documents through full pipeline
 python3 scripts/run_pipeline.py
 
-# Process specific number of documents
-python3 scripts/run_pipeline.py --batch-size 5
-
-# Resume failed jobs
-python3 scripts/run_pipeline.py --resume-failed
+# Or run in test mode with dummy data
+python3 scripts/run_pipeline.py --test
 ```
 
-#### 3. Monitor Progress
+#### 4. Check Results
 
 ```bash
-# View logs in real-time
+# View extracted text files
+ls data/processed/
+
+# View processing logs
 tail -f data/logs/fara_pipeline.log
 
-# Check job status
+# Check pipeline status
 python3 -c "
 from src.pipeline.orchestrator import PipelineOrchestrator
 orchestrator = PipelineOrchestrator()
-print(orchestrator.get_pipeline_status())
+print(orchestrator.get_pipeline_summary())
 "
+```
+
+### 📁 Output Structure
+
+After processing, your files will be organized as:
+
+```
+data/
+├── raw/fara_documents/          # Downloaded PDF files
+│   ├── document1.pdf
+│   └── document2.pdf
+├── processed/                   # Extracted text and structured data
+│   ├── extracted_data/         # JSON files with structured data
+│   ├── validated_data/         # Validated and cleaned data
+│   └── document1.txt           # Raw extracted text
+└── logs/                       # Processing logs
+    └── fara_pipeline.log       # Detailed processing history
 ```
 
 ### Advanced Usage
