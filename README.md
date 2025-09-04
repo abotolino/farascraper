@@ -18,7 +18,7 @@ git clone https://github.com/abotolino/farascraper.git
 cd farascraper
 
 # Set up environment
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
@@ -186,7 +186,7 @@ git clone https://github.com/abotolino/farascraper.git
 cd fara-pipeline
 
 # Create virtual environment
-python -m venv venv
+python3 -m venv venv
 
 # Activate virtual environment
 # Linux/macOS:
@@ -206,11 +206,11 @@ pip install -e .
 ```bash
 # Test system dependencies
 tesseract --version
-python -c "import cv2; print('OpenCV:', cv2.__version__)"
-python -c "import PIL; print('Pillow: OK')"
+python3 -c "import cv2; print('OpenCV:', cv2.__version__)"
+python3 -c "import PIL; print('Pillow: OK')"
 
 # Test package installation
-python -c "from src.downloader import fara_scraper; print('Package installed successfully')"
+python3 -c "from src.downloader import fara_scraper; print('Package installed successfully')"
 ```
 
 ## ⚙️ Configuration
@@ -270,7 +270,7 @@ LOG_FILE_ROTATION=true
 
 ```bash
 # Test FARA website connection
-python scripts/test_scraper.py
+python3 scripts/test_scraper.py
 
 # Expected output:
 # Authentication successful
@@ -282,13 +282,13 @@ python scripts/test_scraper.py
 
 ```bash
 # Process all available documents
-python scripts/run_pipeline.py
+python3 scripts/run_pipeline.py
 
 # Process specific number of documents
-python scripts/run_pipeline.py --batch-size 5
+python3 scripts/run_pipeline.py --batch-size 5
 
 # Resume failed jobs
-python scripts/run_pipeline.py --resume-failed
+python3 scripts/run_pipeline.py --resume-failed
 ```
 
 #### 3. Monitor Progress
@@ -298,7 +298,7 @@ python scripts/run_pipeline.py --resume-failed
 tail -f data/logs/fara_pipeline.log
 
 # Check job status
-python -c "
+python3 -c "
 from src.pipeline.orchestrator import PipelineOrchestrator
 orchestrator = PipelineOrchestrator()
 print(orchestrator.get_pipeline_status())
@@ -519,14 +519,14 @@ This project maintains high code quality standards:
 ```bash
 # Error: "Authentication failed"
 # Solution: Verify credentials in .env file
-python -c "from config.settings import get_settings; s=get_settings(); print(f'Username: {s.fara.username}')"
+python3 -c "from config.settings import get_settings; s=get_settings(); print(f'Username: {s.fara.username}')"
 ```
 
 #### OCR Accuracy Issues
 ```bash
 # Error: Low confidence scores
 # Solution: Check image preprocessing
-python scripts/debug_ocr.py path/to/problematic.pdf
+python3 scripts/debug_ocr.py path/to/problematic.pdf
 ```
 
 #### Rate Limiting
@@ -553,7 +553,7 @@ Enable detailed logging for troubleshooting:
 LOG_LEVEL=DEBUG
 
 # Run with verbose output
-python scripts/run_pipeline.py --verbose
+python3 scripts/run_pipeline.py --verbose
 
 # Check logs
 tail -f data/logs/fara_pipeline.log | grep ERROR
