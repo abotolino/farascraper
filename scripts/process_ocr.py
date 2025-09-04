@@ -8,7 +8,10 @@ and extracts text using OCR, saving results to data/processed/.
 
 import sys
 import os
+import json
+import csv
 from pathlib import Path
+from dataclasses import asdict
 
 # Add project root to path
 project_root = Path(__file__).parent.parent
@@ -25,6 +28,38 @@ except ImportError as e:
     sys.exit(1)
 
 logger = get_logger(__name__)
+
+
+def save_fara_data(fara_data, output_dir):
+    """Save FARA data to JSON and CSV files"""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+    
+    # Create filename from source file
+    base_name = Path(fara_data.source_file).stem
+    
+    # Save individual JSON file per document
+    json_file = output_dir / f"{base_name}.json"
+    with open(json_file, 'w', encoding='utf-8') as f:
+        json.dump(asdict(fara_data), f, indent=2, ensure_ascii=False)
+    
+    # Append to consolidated CSV file
+    csv_file = output_dir / "fara_extracted_data.csv"
+    file_exists = csv_file.exists()
+    
+    with open(csv_file, 'a', newline='', encoding='utf-8') as f:
+        # Get all fields, excluding raw_text for CSV to keep it manageable
+        data_dict = asdict(fara_data)
+        data_dict.pop('raw_text', None)  # Remove raw_text from CSV output
+        
+        fieldnames = list(data_dict.keys())
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(data_dict)
+    
+    return json_file, csv_file
 
 
 def process_downloaded_documents():
@@ -74,6 +109,16 @@ def process_downloaded_documents():
                 print(f"✅ Successfully processed: {pdf_file.name}")
                 print(f"   Registrant: {result.registrant_name or 'Not found'}")
                 print(f"   Confidence: {result.confidence_score:.1f}%")
+                
+                # Save the extracted data to files
+                try:
+                    json_file, csv_file = save_fara_data(result, settings.processed_data)
+                    print(f"   📄 JSON: {json_file.name}")
+                    print(f"   📊 CSV: Updated {csv_file.name}")
+                except Exception as e:
+                    print(f"   ⚠️  Warning: Failed to save data to files: {e}")
+                    logger.error("File saving failed", file=pdf_file.name, error=str(e))
+                
                 processed_count += 1
             else:
                 print(f"❌ Failed to process: {pdf_file.name}")
