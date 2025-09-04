@@ -662,4 +662,4 @@ Contributions are welcome!
 
 ---
 
-**Built with ❤️ for government transparency and automation**
+**Built for government transparency and automation**
