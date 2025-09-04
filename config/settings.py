@@ -1,4 +1,5 @@
 import os
+import getpass
 from pathlib import Path
 from decouple import config
 
@@ -8,9 +9,9 @@ class SimpleSettings:
     
     def __init__(self):
         # FARA settings
-        self.fara_username = config("FARA_USERNAME", default="your_username_here")
-        self.fara_password = config("FARA_PASSWORD", default="your_password_here") 
         self.fara_base_url = config("FARA_BASE_URL", default="http://fara.crphq.org")
+        self._fara_username = None
+        self._fara_password = None
         
         # OCR settings
         self.ocr_provider = config("OCR_PROVIDER", default="textract")
@@ -48,6 +49,42 @@ class SimpleSettings:
         
         # Create directories
         self.create_directories()
+    
+    def _get_fara_credentials(self):
+        """Get FARA credentials from environment or prompt user"""
+        username = config("FARA_USERNAME", default=None)
+        password = config("FARA_PASSWORD", default=None)
+        
+        # Check if credentials are properly configured (not default placeholders)
+        if not username or username in ["your_username_here", "your_email@opensecrets.com"]:
+            print("\n🔐 FARA Authentication Required")
+            print("Please enter your FARA database credentials:")
+            username = input("FARA Username: ").strip()
+        
+        if not password or password in ["your_password_here", "your_secure_password"]:
+            if not password:  # Only print message if we haven't already prompted for username
+                print("\n🔐 FARA Authentication Required")
+                print("Please enter your FARA database credentials:")
+            password = getpass.getpass("FARA Password: ").strip()
+        
+        if not username or not password:
+            raise ValueError("FARA credentials are required to run the scraper")
+        
+        return username, password
+    
+    @property
+    def fara_username(self):
+        """Lazy load FARA username"""
+        if self._fara_username is None:
+            self._fara_username, self._fara_password = self._get_fara_credentials()
+        return self._fara_username
+    
+    @property
+    def fara_password(self):
+        """Lazy load FARA password"""
+        if self._fara_password is None:
+            self._fara_username, self._fara_password = self._get_fara_credentials()
+        return self._fara_password
     
     def create_directories(self):
         """Create all necessary directories"""
