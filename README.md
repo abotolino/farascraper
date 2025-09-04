@@ -18,7 +18,7 @@ git clone https://github.com/abotolino/farascraper.git
 cd farascraper
 
 # Set up environment
-python3 -m venv venv
+python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
@@ -45,7 +45,7 @@ python scripts/test_scraper.py
 - [Troubleshooting](#-troubleshooting)
 - [Contributing](#-contributing)
 
-## Features
+## ✨ Features
 
 ### Stage 1: Document Download ✅ **COMPLETED**
 - **Automated Authentication**: Handles Rails/Devise login with CSRF tokens
@@ -616,3 +616,7 @@ Contributions are welcome!
 - **Documentation**: Check the `docs/` directory for detailed guides
 - **Issues**: Use GitHub Issues for bug reports and feature requests
 - **Email**: [abotolino@opensecrets.com] for direct support
+
+---
+
+**Built with ❤️ for government transparency and automation**
