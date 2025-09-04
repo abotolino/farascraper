@@ -30,7 +30,7 @@ cp .env.example .env
 # Edit .env with your FARA credentials
 
 # Run a test
-python scripts/test_scraper.py
+python3 scripts/test_scraper.py
 ```
 
 ## 📋 Table of Contents
