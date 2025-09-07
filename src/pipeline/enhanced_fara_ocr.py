@@ -705,57 +705,81 @@ class EnhancedFARAOCRProcessor:
         # Convert to string to check column headers and content
         df_str = df.to_string().lower()
         
-        # Look for key indicators
-        indicators = [
+        # Look for exact Item 14(a) column headers
+        required_headers = [
             'foreign principal',
-            'date received',
+            'date received', 
             'from whom',
             'purpose',
             'amount'
         ]
         
-        indicator_count = sum(1 for indicator in indicators if indicator in df_str)
+        header_count = sum(1 for header in required_headers if header in df_str)
         
-        # Also check for currency amounts
-        has_currency = bool(re.search(r'\$\d+', df_str))
+        # Also check for currency amounts and date patterns
+        has_currency = bool(re.search(r'\$[\d,]+\.?\d*', df_str))
+        has_dates = bool(re.search(r'\d{1,2}/\d{1,2}/\d{4}', df_str))
         
-        return indicator_count >= 3 or has_currency
+        # Check for "Item 14(a)" or "Response to Item 14(a)" in the data
+        has_14a_reference = bool(re.search(r'item\s+14\s*\(\s*a\s*\)', df_str))
+        
+        # Be more strict - require at least 4 headers OR clear Item 14(a) reference with financial data
+        return header_count >= 4 or (has_14a_reference and has_currency and has_dates)
     
     def _parse_tabula_table(self, df) -> List[Item14aEntry]:
         """Parse a tabula-extracted DataFrame into Item14aEntry objects"""
         entries = []
         
-        # Try to identify column mappings
-        column_map = self._map_table_columns(df)
+        # Clean the DataFrame first - remove header rows and empty rows
+        df_cleaned = self._clean_tabula_dataframe(df)
         
-        for index, row in df.iterrows():
+        # Try to identify column mappings
+        column_map = self._map_table_columns(df_cleaned)
+        
+        self.logger.info(f"Mapped columns: {column_map}")
+        self.logger.info(f"DataFrame shape after cleaning: {df_cleaned.shape}")
+        
+        for index, row in df_cleaned.iterrows():
             entry = Item14aEntry()
             
             try:
                 # Extract data based on column mapping
                 if 'foreign_principal' in column_map:
-                    entry.foreign_principal = str(row[column_map['foreign_principal']]).strip()
+                    fp_value = str(row[column_map['foreign_principal']]).strip()
+                    if fp_value and fp_value.lower() not in ['nan', 'none', '']:
+                        entry.foreign_principal = fp_value
                 
                 if 'date_received' in column_map:
-                    entry.date_received = str(row[column_map['date_received']]).strip()
+                    date_value = str(row[column_map['date_received']]).strip()
+                    if date_value and date_value.lower() not in ['nan', 'none', '']:
+                        entry.date_received = self._clean_date_string(date_value)
                 
                 if 'from_whom' in column_map:
-                    entry.from_whom = str(row[column_map['from_whom']]).strip()
-                elif entry.foreign_principal:
-                    entry.from_whom = entry.foreign_principal
+                    from_value = str(row[column_map['from_whom']]).strip()
+                    if from_value and from_value.lower() not in ['nan', 'none', '']:
+                        entry.from_whom = from_value
                 
                 if 'purpose' in column_map:
-                    entry.purpose = str(row[column_map['purpose']]).strip()
+                    purpose_value = str(row[column_map['purpose']]).strip()
+                    if purpose_value and purpose_value.lower() not in ['nan', 'none', '']:
+                        entry.purpose = purpose_value
                 
                 if 'amount' in column_map:
                     amount_str = str(row[column_map['amount']]).strip()
-                    entry.amount = amount_str
-                    entry.amount_numeric = self._parse_currency_from_string(amount_str)
+                    # Skip subtotal indicators (amounts with ">")
+                    if amount_str and not amount_str.startswith('>') and amount_str.lower() not in ['nan', 'none', '']:
+                        entry.amount = amount_str
+                        entry.amount_numeric = self._parse_currency_from_string(amount_str)
                 
-                # Only add entries with essential data
-                if entry.foreign_principal and (entry.amount_numeric > 0 or entry.date_received):
-                    entry.row_confidence = 90.0  # High confidence for tabula extraction
+                # Determine confidence based on completeness
+                confidence = self._calculate_row_confidence(entry)
+                entry.row_confidence = confidence
+                
+                # Add entry if it has minimum essential data (foreign principal OR amount)
+                if (entry.foreign_principal or entry.amount_numeric > 0) and confidence >= 50.0:
                     entries.append(entry)
+                    if confidence < 75.0:
+                        self.logger.warning(f"Low confidence entry ({confidence:.1f}%): {entry.foreign_principal} - ${entry.amount_numeric}")
                     
             except Exception as e:
                 self.logger.warning(f"Failed to parse row {index}: {e}")
@@ -783,6 +807,77 @@ class EnhancedFARAOCRProcessor:
         
         return column_map
     
+    def _clean_tabula_dataframe(self, df):
+        """Clean tabula-extracted DataFrame by removing headers and empty rows"""
+        import pandas as pd
+        
+        # Create a copy to avoid modifying the original
+        df_clean = df.copy()
+        
+        # Remove rows that are likely column headers (contain header text)
+        header_indicators = ['foreign principal', 'date received', 'from whom', 'purpose', 'amount', 'subtotal']
+        
+        def is_header_row(row):
+            row_str = ' '.join(str(val).lower() for val in row.values if str(val) != 'nan')
+            return any(indicator in row_str for indicator in header_indicators)
+        
+        # Filter out header rows
+        df_clean = df_clean[~df_clean.apply(is_header_row, axis=1)]
+        
+        # Remove completely empty rows
+        df_clean = df_clean.dropna(how='all')
+        
+        # Remove rows where all string values are empty/nan
+        def is_empty_row(row):
+            non_empty_vals = [str(val) for val in row.values if str(val).strip() and str(val).lower() != 'nan']
+            return len(non_empty_vals) == 0
+        
+        df_clean = df_clean[~df_clean.apply(is_empty_row, axis=1)]
+        
+        # Reset index
+        df_clean = df_clean.reset_index(drop=True)
+        
+        return df_clean
+    
+    def _clean_date_string(self, date_str: str) -> str:
+        """Clean and normalize date string"""
+        if not date_str or str(date_str).lower() == 'nan':
+            return ""
+        
+        # Handle date ranges - extract the first date
+        if '-' in date_str:
+            parts = date_str.split('-')
+            return parts[0].strip()
+        
+        return date_str.strip()
+    
+    def _calculate_row_confidence(self, entry: Item14aEntry) -> float:
+        """Calculate confidence score for a table row entry"""
+        score = 0.0
+        total_checks = 5.0
+        
+        # Foreign principal (required field)
+        if entry.foreign_principal and len(entry.foreign_principal) > 3:
+            score += 1.0
+        
+        # Date received
+        if entry.date_received:
+            score += 1.0
+        
+        # From whom
+        if entry.from_whom and len(entry.from_whom) > 3:
+            score += 1.0
+        
+        # Purpose
+        if entry.purpose and len(entry.purpose) > 5:
+            score += 1.0
+        
+        # Amount (most critical)
+        if entry.amount_numeric > 0:
+            score += 1.0
+        
+        return (score / total_checks) * 100.0
+    
     def _parse_currency_from_string(self, amount_str: str) -> float:
         """Parse currency string to float, handling various formats"""
         try:
@@ -803,32 +898,39 @@ class EnhancedFARAOCRProcessor:
         # First check if Item 14(a) references an appendix
         appendix_referenced = self._check_14a_appendix_reference(text)
         
-        # Detect Item 14(a) table sections
-        table_sections = self.table_parser.detect_item_14a_tables(text)
+        if appendix_referenced:
+            self.logger.info("Item 14(a) references appendix - focusing on appendix table extraction")
         
-        if not table_sections and not appendix_referenced:
-            self.logger.warning("No Item 14(a) tables detected and no appendix reference found")
+        # Detect Item 14(a) table sections with enhanced appendix detection
+        table_sections = self._extract_appendix_tables_from_ocr(text)
+        
+        if not table_sections:
+            self.logger.warning("No Item 14(a) appendix tables detected in OCR text")
             return result
         
         result.table_detected = True
         all_entries = []
         
-        # Process each detected table
+        # Process each detected table with enhanced parsing
         for i, table_text in enumerate(table_sections):
-            self.logger.info(f"Processing Item 14(a) table {i+1}")
-            result.raw_table_text += f"\n--- Table {i+1} ---\n{table_text}"
+            self.logger.info(f"Processing Item 14(a) table {i+1} (OCR fallback)")
+            result.raw_table_text += f"\n--- OCR Table {i+1} ---\n{table_text}"
             
-            entries = self.table_parser.parse_table_to_entries(table_text)
+            entries = self._parse_ocr_table_text(table_text)
             all_entries.extend(entries)
         
         # Clean and validate entries
         validated_entries = []
         total_amount = 0.0
+        warning_count = 0
         
         for entry in all_entries:
-            if entry.row_confidence > 30.0:  # Only include entries with reasonable confidence
+            if entry.row_confidence >= 50.0:  # Lower threshold for OCR fallback
                 validated_entries.append(entry)
                 total_amount += entry.amount_numeric
+                
+                if entry.row_confidence < 75.0:
+                    warning_count += 1
         
         result.entries = validated_entries
         result.total_entries = len(validated_entries)
@@ -838,11 +940,14 @@ class EnhancedFARAOCRProcessor:
         if validated_entries:
             entry_confidences = [entry.row_confidence for entry in validated_entries]
             avg_entry_confidence = sum(entry_confidences) / len(entry_confidences)
-            result.extraction_confidence = min(ocr_confidence, avg_entry_confidence)
+            result.extraction_confidence = min(ocr_confidence * 0.8, avg_entry_confidence)  # Lower confidence for OCR
         else:
             result.extraction_confidence = 0.0
         
-        self.logger.info(f"Extracted {len(validated_entries)} valid entries with total amount ${total_amount:,.2f}")
+        if warning_count > 0:
+            self.logger.warning(f"OCR fallback used - {warning_count} entries have <75% confidence")
+        
+        self.logger.info(f"OCR fallback extracted {len(validated_entries)} entries with total amount ${total_amount:,.2f}")
         
         return result
     
@@ -872,6 +977,153 @@ class EnhancedFARAOCRProcessor:
                 return True
         
         return False
+    
+    def _extract_appendix_tables_from_ocr(self, text: str) -> List[str]:
+        """Extract Item 14(a) table sections from OCR text, focusing on appendix sections"""
+        tables = []
+        
+        # Look for appendix sections with Item 14(a) detail
+        appendix_patterns = [
+            r'Appendix\s*Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail(.*?)(?=Appendix\s*Response\s+to\s+Item|Received\s+by\s+NSD|$)',
+            r'Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail(.*?)(?=Response\s+to\s+Item\s+(?!14\(a\))|Received\s+by\s+NSD|$)',
+            r'Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail.*?Foreign\s+Principal.*?(.*?)(?=Item\s+\d+|Received\s+by\s+NSD|$)'
+        ]
+        
+        for pattern in appendix_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                table_text = match.group(0)
+                if self._validate_ocr_table_content(table_text):
+                    tables.append(table_text)
+                    self.logger.info(f"Found appendix table section: {len(table_text)} characters")
+        
+        return tables
+    
+    def _validate_ocr_table_content(self, text: str) -> bool:
+        """Validate that OCR text contains actual Item 14(a) table content"""
+        # Check for required elements
+        has_headers = any(header in text.lower() for header in [
+            'foreign principal', 'date received', 'from whom', 'purpose', 'amount'
+        ])
+        
+        # Check for financial amounts
+        has_amounts = bool(re.search(r'\$\s*[\d,]+\.?\d*', text))
+        
+        # Check for dates
+        has_dates = bool(re.search(r'\d{1,2}/\d{1,2}/\d{4}', text))
+        
+        # Must have headers and financial data
+        return has_headers and (has_amounts or has_dates)
+    
+    def _parse_ocr_table_text(self, table_text: str) -> List[Item14aEntry]:
+        """Parse OCR table text into structured entries"""
+        entries = []
+        
+        # Split text into lines and clean
+        lines = [line.strip() for line in table_text.split('\n') if line.strip()]
+        
+        # Remove header lines
+        data_lines = []
+        for line in lines:
+            line_lower = line.lower()
+            if not any(header in line_lower for header in [
+                'foreign principal', 'date received', 'from whom', 'purpose', 'amount', 'subtotal',
+                'appendix', 'response to item'
+            ]):
+                data_lines.append(line)
+        
+        # Group lines into potential entries
+        current_entry_lines = []
+        
+        for line in data_lines:
+            # Check if this line starts a new entry (has an entity name or clear structure)
+            if self._looks_like_entry_start(line) and current_entry_lines:
+                # Process the current entry
+                entry = self._parse_ocr_entry_lines(current_entry_lines)
+                if entry:
+                    entries.append(entry)
+                current_entry_lines = [line]
+            else:
+                current_entry_lines.append(line)
+        
+        # Process the last entry
+        if current_entry_lines:
+            entry = self._parse_ocr_entry_lines(current_entry_lines)
+            if entry:
+                entries.append(entry)
+        
+        return entries
+    
+    def _looks_like_entry_start(self, line: str) -> bool:
+        """Determine if a line looks like the start of a new table entry"""
+        # Lines with entity names typically have proper nouns and are substantial
+        has_proper_nouns = any(word[0].isupper() for word in line.split() if len(word) > 2)
+        has_entity_indicators = any(indicator in line.lower() for indicator in [
+            'tourist', 'tourism', 'board', 'office', 'bureau', 'embassy', 'government', 
+            'ministry', 'authority', 'association', 'national'
+        ])
+        
+        # Not just a date or amount
+        is_not_just_data = not re.match(r'^[\d\/\-\$\s,\.]+$', line.strip())
+        
+        return (has_proper_nouns or has_entity_indicators) and is_not_just_data and len(line) > 10
+    
+    def _parse_ocr_entry_lines(self, lines: List[str]) -> Optional[Item14aEntry]:
+        """Parse a group of OCR lines into a single Item14aEntry"""
+        if not lines:
+            return None
+        
+        entry = Item14aEntry()
+        full_text = ' '.join(lines)
+        
+        # Extract foreign principal (usually the first line or longest meaningful line)
+        for line in lines:
+            if (len(line) > 10 and 
+                any(word[0].isupper() for word in line.split() if len(word) > 2) and
+                not re.search(r'\$[\d,]+', line) and
+                not re.search(r'\d{1,2}/\d{1,2}/\d{4}', line)):
+                entry.foreign_principal = line.strip()
+                break
+        
+        # Extract date (look for MM/DD/YYYY pattern, including ranges)
+        date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{4}(?:\s*[-–]\s*\d{1,2}/\d{1,2}/\d{4})?)', full_text)
+        if date_match:
+            entry.date_received = date_match.group(1).strip()
+        
+        # Extract amounts (skip subtotals with >)
+        amounts = re.findall(r'\$\s*([\d,]+\.?\d*)', full_text)
+        amounts = [amt for amt in amounts if not amt.startswith('>')]
+        
+        if amounts:
+            # Take the first amount as the main amount
+            entry.amount = amounts[0]
+            entry.amount_numeric = self._parse_currency_from_string(amounts[0])
+        
+        # Extract purpose (look for service descriptions)
+        purpose_keywords = ['professional services', 'media placement', 'expense reimbursement', 
+                          'advertising', 'marketing', 'promotion', 'consulting', 'travel']
+        
+        purpose_parts = []
+        for line in lines:
+            line_lower = line.lower()
+            if any(keyword in line_lower for keyword in purpose_keywords):
+                purpose_parts.append(line.strip())
+        
+        if purpose_parts:
+            entry.purpose = ', '.join(purpose_parts)
+        
+        # Set from_whom to foreign_principal if not found separately
+        if not entry.from_whom and entry.foreign_principal:
+            entry.from_whom = entry.foreign_principal
+        
+        # Calculate confidence
+        entry.row_confidence = self._calculate_row_confidence(entry)
+        
+        # Only return if we have essential data
+        if entry.foreign_principal or entry.amount_numeric > 0:
+            return entry
+        
+        return None
     
     def save_14a_results(self, result: Item14aData, output_path: Path) -> Path:
         """Save Item 14(a) results in the requested JSON format"""
