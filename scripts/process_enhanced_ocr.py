@@ -178,6 +178,16 @@ def main():
     print("in FARA documents for improved accuracy and structure.")
     print()
     
+    # Check for tabula-py availability
+    try:
+        import tabula
+        print("tabula-py detected: Will use direct table extraction for better accuracy")
+    except ImportError:
+        print("tabula-py not available: Will use OCR-based extraction")
+        print("For better accuracy, install with: pip install tabula-py")
+        print("Note: Also requires Java to be installed on your system")
+    print()
+    
     try:
         process_documents_enhanced()
     except KeyboardInterrupt:

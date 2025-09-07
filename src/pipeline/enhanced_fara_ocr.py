@@ -27,6 +27,15 @@ except ImportError as e:
     print("Install missing packages with: pip install opencv-python pytesseract pdf2image pillow numpy")
     sys.exit(1)
 
+# Optional tabula-py for enhanced table extraction
+try:
+    import tabula
+    TABULA_AVAILABLE = True
+except ImportError:
+    TABULA_AVAILABLE = False
+    print("tabula-py not available. Install with: pip install tabula-py")
+    print("Note: Also requires Java to be installed on your system")
+
 
 @dataclass
 class Item14aEntry:
@@ -133,7 +142,11 @@ class Item14aTableParser:
             r'Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail',
             r'Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail',
             r'14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail',
-            r'RECEIPTS[-\s]*MONIES.*Detail'
+            r'RECEIPTS[-\s]*MONIES.*Detail',
+            # Appendix patterns
+            r'Appendix\s*Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail',
+            r'Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*Detail',
+            r'Appendix.*Item\s+14\s*\(\s*a\s*\)'
         ]
         
         # Column header patterns
@@ -156,6 +169,11 @@ class Item14aTableParser:
         """Detect and extract Item 14(a) table sections"""
         tables = []
         
+        # First, try to find appendix sections specifically
+        appendix_tables = self._extract_appendix_14a_tables(text)
+        tables.extend(appendix_tables)
+        
+        # Then look for regular Item 14(a) sections
         for pattern in self.item_14a_patterns:
             matches = re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE)
             
@@ -166,7 +184,9 @@ class Item14aTableParser:
                     r'\n\s*Item\s+\d+',
                     r'\n\s*\d+\.\s*\([a-z]\)',
                     r'\n\s*Received\s+by\s+NSD',
-                    r'\n\s*Page\s+\d+'
+                    r'\n\s*Page\s+\d+',
+                    r'\n\s*Appendix\s*$',
+                    r'\n\s*Response\s+to\s+Item\s+(?!14\(a\))'
                 ]
                 
                 end_pos = len(text)
@@ -178,7 +198,9 @@ class Item14aTableParser:
                 
                 table_text = text[start_pos:end_pos]
                 if self._validate_table_content(table_text):
-                    tables.append(table_text)
+                    # Avoid duplicates from appendix extraction
+                    if not any(self._is_duplicate_table(table_text, existing) for existing in tables):
+                        tables.append(table_text)
         
         return tables
     
@@ -197,6 +219,41 @@ class Item14aTableParser:
         has_dates = bool(re.search(self.date_pattern, text))
         
         return header_count >= 3 and (has_amounts or has_dates)
+    
+    def _extract_appendix_14a_tables(self, text: str) -> List[str]:
+        """Extract Item 14(a) tables from appendix sections"""
+        tables = []
+        
+        # Look for appendix sections that contain Item 14(a) responses
+        appendix_patterns = [
+            r'Appendix\s*Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail(.*?)(?=Appendix\s*Response\s+to\s+Item|Received\s+by\s+NSD|$)',
+            r'Response\s+to\s+Item\s+14\s*\(\s*a\s*\)\s*[-\s]*\s*Detail(.*?)(?=Response\s+to\s+Item\s+(?!14\(a\))|Received\s+by\s+NSD|$)',
+            r'Appendix.*?Item\s+14\s*\(\s*a\s*\).*?Foreign\s+Principal.*?(.*?)(?=Appendix|Received\s+by\s+NSD|$)'
+        ]
+        
+        for pattern in appendix_patterns:
+            matches = re.finditer(pattern, text, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                table_text = match.group(0)
+                if self._validate_table_content(table_text):
+                    tables.append(table_text)
+        
+        return tables
+    
+    def _is_duplicate_table(self, new_table: str, existing_table: str) -> bool:
+        """Check if two table texts are duplicates"""
+        # Remove whitespace and compare key elements
+        new_clean = re.sub(r'\s+', ' ', new_table.lower())
+        existing_clean = re.sub(r'\s+', ' ', existing_table.lower())
+        
+        # If they share significant common text, consider them duplicates
+        if len(new_clean) > 100 and len(existing_clean) > 100:
+            common_threshold = min(len(new_clean), len(existing_clean)) * 0.7
+            common_chars = sum(1 for i, char in enumerate(new_clean[:len(existing_clean)]) 
+                             if i < len(existing_clean) and char == existing_clean[i])
+            return common_chars > common_threshold
+        
+        return False
     
     def parse_table_to_entries(self, table_text: str) -> List[Item14aEntry]:
         """Parse table text into structured entries"""
@@ -265,7 +322,11 @@ class Item14aTableParser:
         current_entry = []
         
         for line in lines:
-            # Check if this line starts a new entry (contains entity name or date)
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if this line starts a new entry
             if self._is_new_entry_start(line) and current_entry:
                 if len(current_entry) > 0:
                     entries.append(current_entry)
@@ -276,6 +337,10 @@ class Item14aTableParser:
         # Add the last entry
         if current_entry:
             entries.append(current_entry)
+        
+        # For appendix tables, try a different approach - parse as table rows
+        if not entries or len(entries) < 2:
+            entries = self._parse_appendix_table_rows(lines)
         
         return entries
     
@@ -297,6 +362,81 @@ class Item14aTableParser:
         is_long_text = len(line.strip()) > 30 and not has_date and not has_amount
         
         return has_company_name or is_long_text
+    
+    def _parse_appendix_table_rows(self, lines: List[str]) -> List[List[str]]:
+        """Parse appendix table format where each row contains all fields"""
+        entries = []
+        
+        # Look for lines that contain entity names with dates and amounts
+        for line in lines:
+            if (len(line) > 30 and 
+                re.search(self.date_pattern, line) and
+                re.search(self.currency_pattern, line)):
+                
+                # This looks like a complete table row
+                entries.append([line])
+        
+        # If still no entries, try to reconstruct from fragments
+        if not entries:
+            entries = self._reconstruct_table_from_fragments(lines)
+            
+        return entries
+    
+    def _reconstruct_table_from_fragments(self, lines: List[str]) -> List[List[str]]:
+        """Attempt to reconstruct table entries from fragmented OCR text"""
+        entries = []
+        current_parts = {
+            'principal': '',
+            'date': '',
+            'from_whom': '',
+            'purpose': '',
+            'amount': ''
+        }
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Look for date patterns
+            date_match = re.search(self.date_pattern, line)
+            if date_match:
+                current_parts['date'] = date_match.group(1)
+            
+            # Look for amount patterns
+            amount_match = re.search(self.currency_pattern, line)
+            if amount_match:
+                current_parts['amount'] = amount_match.group(1)
+            
+            # Look for entity names (lines with proper nouns that aren't amounts/dates)
+            if (not date_match and not amount_match and 
+                len(line) > 10 and 
+                any(c.isupper() for c in line) and
+                not re.match(r'^[\d\.\,\/\s-]+$', line)):
+                
+                if not current_parts['principal']:
+                    current_parts['principal'] = line
+                    current_parts['from_whom'] = line
+                elif 'purpose' not in current_parts or not current_parts['purpose']:
+                    current_parts['purpose'] = line
+                
+            # If we have enough parts, create an entry
+            if (current_parts['principal'] and current_parts['amount'] and 
+                (current_parts['date'] or current_parts['purpose'])):
+                
+                entry_line = f"{current_parts['principal']} {current_parts['date']} {current_parts['from_whom']} {current_parts['purpose']} {current_parts['amount']}"
+                entries.append([entry_line])
+                
+                # Reset for next entry
+                current_parts = {
+                    'principal': '',
+                    'date': '',
+                    'from_whom': '',
+                    'purpose': '',
+                    'amount': ''
+                }
+        
+        return entries
     
     def _parse_entry_group(self, group: List[str]) -> Item14aEntry:
         """Parse a group of lines into a single entry"""
@@ -434,6 +574,7 @@ class EnhancedFARAOCRProcessor:
         self.logger = self._setup_logging()
         self.image_processor = EnhancedImageProcessor()
         self.table_parser = Item14aTableParser()
+        self.use_tabula = TABULA_AVAILABLE
     
     def _setup_logging(self) -> logging.Logger:
         """Setup logging configuration"""
@@ -456,47 +597,19 @@ class EnhancedFARAOCRProcessor:
         self.logger.info(f"Processing document for Item 14(a) tables: {pdf_path}")
         
         try:
-            # Convert PDF to images with high DPI for better table detection
-            images = convert_from_path(pdf_path, dpi=300, fmt='jpeg')
-            if not images:
-                return Item14aData(received_timestamp=datetime.now().strftime('%m/%d/%Y %I:%M:%S %p'))
+            result = Item14aData(received_timestamp=datetime.now().strftime('%m/%d/%Y %I:%M:%S %p'))
             
-            all_text = []
-            total_confidence = 0.0
+            # First try tabula-py for direct table extraction if available
+            if self.use_tabula:
+                tabula_result = self._extract_with_tabula(pdf_path)
+                if tabula_result.total_entries > 0:
+                    self.logger.info("Successfully extracted tables using tabula-py")
+                    return tabula_result
+                else:
+                    self.logger.info("Tabula-py extraction yielded no results, falling back to OCR")
             
-            # Process each page with enhanced table preprocessing
-            for i, image in enumerate(images):
-                enhanced_image = self.image_processor.enhance_for_tables(image)
-                
-                # Use table-optimized OCR settings
-                config = '--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$,.()/:- '
-                
-                try:
-                    text = pytesseract.image_to_string(enhanced_image, config=config)
-                    all_text.append(text)
-                    
-                    # Get confidence data
-                    data = pytesseract.image_to_data(
-                        enhanced_image,
-                        output_type=pytesseract.Output.DICT,
-                        config=config
-                    )
-                    confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
-                    page_confidence = sum(confidences) / len(confidences) if confidences else 0
-                    total_confidence += page_confidence
-                    
-                except Exception as e:
-                    self.logger.warning(f"Failed to process page {i+1}: {e}")
-                    continue
-            
-            # Combine all text
-            combined_text = "\n\n--- PAGE BREAK ---\n\n".join(all_text)
-            avg_confidence = total_confidence / len(images) if images else 0.0
-            
-            # Extract Item 14(a) tables
-            result = self._extract_14a_data(combined_text, avg_confidence)
-            result.received_timestamp = datetime.now().strftime('%m/%d/%Y %I:%M:%S %p')
-            
+            # Fall back to OCR-based extraction
+            result = self._extract_with_ocr(pdf_path)
             return result
             
         except Exception as e:
@@ -507,15 +620,194 @@ class EnhancedFARAOCRProcessor:
                 extraction_confidence=0.0
             )
     
+    def _extract_with_tabula(self, pdf_path: Path) -> Item14aData:
+        """Extract tables using tabula-py"""
+        result = Item14aData(received_timestamp=datetime.now().strftime('%m/%d/%Y %I:%M:%S %p'))
+        
+        try:
+            # Read all tables from the PDF
+            tables = tabula.read_pdf(str(pdf_path), pages='all', multiple_tables=True)
+            
+            all_entries = []
+            
+            for i, df in enumerate(tables):
+                if df.empty:
+                    continue
+                
+                # Check if this table looks like an Item 14(a) table
+                if self._is_14a_table(df):
+                    self.logger.info(f"Found Item 14(a) table {i+1} with {len(df)} rows")
+                    entries = self._parse_tabula_table(df)
+                    all_entries.extend(entries)
+            
+            if all_entries:
+                result.table_detected = True
+                result.entries = all_entries
+                result.total_entries = len(all_entries)
+                result.total_amount = sum(entry.amount_numeric for entry in all_entries)
+                result.extraction_confidence = 85.0  # Higher confidence for tabula extraction
+                
+        except Exception as e:
+            self.logger.warning(f"Tabula extraction failed: {e}")
+        
+        return result
+    
+    def _extract_with_ocr(self, pdf_path: Path) -> Item14aData:
+        """Extract tables using OCR-based method"""
+        # Convert PDF to images with high DPI for better table detection
+        images = convert_from_path(pdf_path, dpi=300, fmt='jpeg')
+        if not images:
+            return Item14aData(received_timestamp=datetime.now().strftime('%m/%d/%Y %I:%M:%S %p'))
+        
+        all_text = []
+        total_confidence = 0.0
+        
+        # Process each page with enhanced table preprocessing
+        for i, image in enumerate(images):
+            enhanced_image = self.image_processor.enhance_for_tables(image)
+            
+            # Use table-optimized OCR settings
+            config = '--oem 3 --psm 6 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$,.()/:- '
+            
+            try:
+                text = pytesseract.image_to_string(enhanced_image, config=config)
+                all_text.append(text)
+                
+                # Get confidence data
+                data = pytesseract.image_to_data(
+                    enhanced_image,
+                    output_type=pytesseract.Output.DICT,
+                    config=config
+                )
+                confidences = [int(conf) for conf in data['conf'] if int(conf) > 0]
+                page_confidence = sum(confidences) / len(confidences) if confidences else 0
+                total_confidence += page_confidence
+                
+            except Exception as e:
+                self.logger.warning(f"Failed to process page {i+1}: {e}")
+                continue
+        
+        # Combine all text
+        combined_text = "\n\n--- PAGE BREAK ---\n\n".join(all_text)
+        avg_confidence = total_confidence / len(images) if images else 0.0
+        
+        # Extract Item 14(a) tables
+        result = self._extract_14a_data(combined_text, avg_confidence)
+        result.received_timestamp = datetime.now().strftime('%m/%d/%Y %I:%M:%S %p')
+        
+        return result
+    
+    def _is_14a_table(self, df) -> bool:
+        """Check if a DataFrame looks like an Item 14(a) table"""
+        if df.empty or len(df.columns) < 4:
+            return False
+        
+        # Convert to string to check column headers and content
+        df_str = df.to_string().lower()
+        
+        # Look for key indicators
+        indicators = [
+            'foreign principal',
+            'date received',
+            'from whom',
+            'purpose',
+            'amount'
+        ]
+        
+        indicator_count = sum(1 for indicator in indicators if indicator in df_str)
+        
+        # Also check for currency amounts
+        has_currency = bool(re.search(r'\$\d+', df_str))
+        
+        return indicator_count >= 3 or has_currency
+    
+    def _parse_tabula_table(self, df) -> List[Item14aEntry]:
+        """Parse a tabula-extracted DataFrame into Item14aEntry objects"""
+        entries = []
+        
+        # Try to identify column mappings
+        column_map = self._map_table_columns(df)
+        
+        for index, row in df.iterrows():
+            entry = Item14aEntry()
+            
+            try:
+                # Extract data based on column mapping
+                if 'foreign_principal' in column_map:
+                    entry.foreign_principal = str(row[column_map['foreign_principal']]).strip()
+                
+                if 'date_received' in column_map:
+                    entry.date_received = str(row[column_map['date_received']]).strip()
+                
+                if 'from_whom' in column_map:
+                    entry.from_whom = str(row[column_map['from_whom']]).strip()
+                elif entry.foreign_principal:
+                    entry.from_whom = entry.foreign_principal
+                
+                if 'purpose' in column_map:
+                    entry.purpose = str(row[column_map['purpose']]).strip()
+                
+                if 'amount' in column_map:
+                    amount_str = str(row[column_map['amount']]).strip()
+                    entry.amount = amount_str
+                    entry.amount_numeric = self._parse_currency_from_string(amount_str)
+                
+                # Only add entries with essential data
+                if entry.foreign_principal and (entry.amount_numeric > 0 or entry.date_received):
+                    entry.row_confidence = 90.0  # High confidence for tabula extraction
+                    entries.append(entry)
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to parse row {index}: {e}")
+                continue
+        
+        return entries
+    
+    def _map_table_columns(self, df) -> Dict[str, str]:
+        """Map DataFrame columns to our expected fields"""
+        column_map = {}
+        
+        for col in df.columns:
+            col_lower = str(col).lower()
+            
+            if 'foreign' in col_lower and 'principal' in col_lower:
+                column_map['foreign_principal'] = col
+            elif 'date' in col_lower and 'received' in col_lower:
+                column_map['date_received'] = col
+            elif 'from' in col_lower and 'whom' in col_lower:
+                column_map['from_whom'] = col
+            elif 'purpose' in col_lower:
+                column_map['purpose'] = col
+            elif 'amount' in col_lower:
+                column_map['amount'] = col
+        
+        return column_map
+    
+    def _parse_currency_from_string(self, amount_str: str) -> float:
+        """Parse currency string to float, handling various formats"""
+        try:
+            # Remove currency symbols and spaces
+            cleaned = re.sub(r'[\$,\s]', '', amount_str)
+            # Handle cases where amount might be in parentheses (negative)
+            if '(' in cleaned and ')' in cleaned:
+                cleaned = cleaned.replace('(', '').replace(')', '')
+                return -float(cleaned) if cleaned else 0.0
+            return float(cleaned) if cleaned else 0.0
+        except (ValueError, TypeError):
+            return 0.0
+    
     def _extract_14a_data(self, text: str, ocr_confidence: float) -> Item14aData:
         """Extract Item 14(a) data from the full document text"""
         result = Item14aData()
         
+        # First check if Item 14(a) references an appendix
+        appendix_referenced = self._check_14a_appendix_reference(text)
+        
         # Detect Item 14(a) table sections
         table_sections = self.table_parser.detect_item_14a_tables(text)
         
-        if not table_sections:
-            self.logger.warning("No Item 14(a) tables detected")
+        if not table_sections and not appendix_referenced:
+            self.logger.warning("No Item 14(a) tables detected and no appendix reference found")
             return result
         
         result.table_detected = True
@@ -553,6 +845,33 @@ class EnhancedFARAOCRProcessor:
         self.logger.info(f"Extracted {len(validated_entries)} valid entries with total amount ${total_amount:,.2f}")
         
         return result
+    
+    def _check_14a_appendix_reference(self, text: str) -> bool:
+        """Check if Item 14(a) section references an appendix for detailed information"""
+        # Look for the 14(a) section
+        section_14a_pattern = r'14\.\s*\(a\)\s*RECEIPTS[-\s]*MONIES.*?(?=14\.\s*\(b\)|15\.\s*\(a\)|$)'
+        section_match = re.search(section_14a_pattern, text, re.DOTALL | re.IGNORECASE)
+        
+        if not section_match:
+            return False
+        
+        section_text = section_match.group(0)
+        
+        # Check for appendix references
+        appendix_indicators = [
+            r'see\s+appendix\s+for\s+response',
+            r'appendix\s+for\s+response',
+            r'see\s+appendix',
+            r'response.*appendix',
+            r'detailed?\s+in\s+appendix'
+        ]
+        
+        for pattern in appendix_indicators:
+            if re.search(pattern, section_text, re.IGNORECASE):
+                self.logger.info("Found appendix reference in Item 14(a)")
+                return True
+        
+        return False
     
     def save_14a_results(self, result: Item14aData, output_path: Path) -> Path:
         """Save Item 14(a) results in the requested JSON format"""
